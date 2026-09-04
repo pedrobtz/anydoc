@@ -1,0 +1,26 @@
+[workspace]
+
+[package]
+# Named `anydoc-r`, not `anydoc`: the upstream dependency is `anydoc`, and while
+# cargo resolves the two fine, identically named entries make build logs and the
+# `-l` flag ambiguous. Mirrors `datafusion-r` in the sibling data.fusion package.
+name = "anydoc-r"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+name = "anydoc_r"
+
+[dependencies]
+anydoc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+# No `strip`: it is a no-op for a staticlib. Measured both ways, the archive is
+# 14.2 MB with an identical symbol count, because cargo strips *linked* outputs
+# (bin, cdylib) and a .a must keep object symbols for the linker. anydoc.so is
+# linked by R's SHLIB, not cargo, so the setting never reaches it either.

@@ -1,0 +1,45 @@
+# Lint and test the wrapper crate on its own. Much faster than a full
+# R CMD check, so it gives quick feedback on Rust-only changes.
+on:
+  push:
+    branches: [main]
+    paths: ['src/rust/**', '.github/workflows/rust-check.yaml']
+  pull_request:
+    paths: ['src/rust/**', '.github/workflows/rust-check.yaml']
+  workflow_dispatch:
+
+name: rust-check.yaml
+
+permissions: read-all
+
+jobs:
+  rust-check:
+    runs-on: ubuntu-latest
+    name: fmt / clippy / test
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/rust
+          shared-key: rust-check
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo fmt
+        working-directory: src/rust
+        run: cargo fmt --all --check
+
+      # Only this crate is linted; the vendored dependency tree is not.
+      - name: cargo clippy
+        working-directory: src/rust
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: src/rust
+        run: cargo test

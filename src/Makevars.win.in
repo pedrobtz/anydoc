@@ -1,0 +1,68 @@
+TARGET_DIR = $(CURDIR)/rust/target
+# `cargo build --release` with no --target always writes here. This is not a
+# knob: nothing passes --target, so a configurable profile directory would only
+# ever point at a path cargo never populates.
+LIBDIR = $(TARGET_DIR)/release
+STATLIB = $(LIBDIR)/libanydoc_r.a
+PKG_LIBS = -L$(LIBDIR) -lanydoc_r -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll
+
+# Resolved by tools/config.R rather than left to the PATH make happens to
+# inherit, which is not necessarily the one R searched.
+CARGO = @CARGO@
+CARGOTMP = $(CURDIR)/.cargo
+VENDOR_DIR = $(CURDIR)/vendor
+
+all: $(SHLIB) rust_clean
+
+.PHONY: $(STATLIB) rust_clean
+
+$(SHLIB): $(STATLIB)
+
+# If a vendor directory exists it is used directly; otherwise vendor.tar.xz
+# (fetched by tools/vendor.R at configure time) is unpacked. Either way the
+# cargo build runs --offline, so no network access happens during R CMD INSTALL.
+#
+# The first command clears any CARGO_HOME left by an interrupted build: a stale
+# config.toml still points cargo at a vendor directory that may no longer exist,
+# and cargo then fails to resolve every dependency.
+#
+# The guard after it exists because a truncated or corrupt archive extracts to
+# nothing, leaving cargo pointed at a directory that does not exist and
+# reporting it as a registry failure. Failing here makes the cause obvious.
+#
+# -j 2 is required by CRAN policy: cargo otherwise defaults to the number of
+# logical CPUs, which exceeds the maximum a check is allowed to use.
+# --locked refuses to silently re-resolve Cargo.lock, so the build cannot quietly
+# use a different anydoc 0.2.x than the one that was vendored and audited.
+$(STATLIB):
+	rm -Rf $(CARGOTMP)
+	if [ -d "$(VENDOR_DIR)" ]; then \
+		echo "*** using vendored crates in $(VENDOR_DIR)"; \
+		mkdir -p $(CARGOTMP) && cp rust/vendor-config.toml $(CARGOTMP)/config.toml; \
+	elif [ -f ./rust/vendor.tar.xz ]; then \
+		echo "*** unpacking vendored crates"; \
+		tar xf rust/vendor.tar.xz && \
+		mkdir -p $(CARGOTMP) && cp rust/vendor-config.toml $(CARGOTMP)/config.toml; \
+	fi
+	if [ -f $(CARGOTMP)/config.toml ] && [ ! -d "$(VENDOR_DIR)" ]; then \
+		echo "ERROR: vendored crates were configured but $(VENDOR_DIR) is missing;" >&2; \
+		echo "       rust/vendor.tar.xz is likely corrupt or truncated." >&2; \
+		exit 1; \
+	fi
+	export CARGO_HOME=$(CARGOTMP) && \
+	export PATH="$(PATH):$(HOME)/.cargo/bin" && \
+	"$(CARGO)" build --lib --release --locked -j 2 @CRAN_FLAGS@ \
+	  --manifest-path=./rust/Cargo.toml --target-dir $(TARGET_DIR)
+	rm -Rf $(CARGOTMP)
+
+# What gets removed below is substituted by tools/config.R (do not write the
+# placeholder name in this comment - the substitution would rewrite it too).
+# A CRAN-style build drops the whole target directory: it is ~300 MB, and
+# R CMD check keeps the built source tree under 00_pkg_src for the rest of the
+# run. With NOT_CRAN set it drops only the build subdirectory, so the developer
+# loop does not pay a full recompile on every reload.
+rust_clean: $(SHLIB)
+	rm -Rf $(CARGOTMP) $(VENDOR_DIR) @CLEAN_TARGET@
+
+clean:
+	rm -Rf $(SHLIB) $(STATLIB) $(OBJECTS) $(TARGET_DIR) $(VENDOR_DIR) $(CARGOTMP)

@@ -1,0 +1,25 @@
+^anydoc\.Rproj$
+^\.Rproj\.user$
+^CLAUDE\.md$
+^\.claude$
+^src/rust/target$
+^src/rust/vendor$
+^src/rust/vendor\.tar\.xz$
+^src/\.cargo$
+^data-raw$
+^src/Makevars$
+^src/Makevars\.win$
+^\.vendor$
+^\.github$
+^cran-comments\.md$
+
+# src/rust is a live cargo working directory, so anything dropped in it would
+# otherwise ship: rustfmt .orig files, logs, flamegraphs, editor state. This is
+# a whitelist rather than a blacklist of junk - only the four entries the build
+# actually needs survive. .Rbuildignore patterns are Perl regexes, so a negative
+# lookahead works here.
+^src/rust/(?!Cargo\.toml$|Cargo\.lock$|vendor-config\.toml$|src(/|$)).
+# And inside src/rust/src, only .rs files and module directories. Allowing any
+# extensionless path keeps nested module dirs working; everything else
+# (lib.rs.orig, .rej, editor swap files) is dropped.
+^src/rust/src/(?!([^.]+|.*\.rs)$).

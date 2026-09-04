@@ -1,0 +1,105 @@
+# Derived from https://github.com/r-lib/actions/tree/v2/examples
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+name: R-CMD-check.yaml
+
+permissions: read-all
+
+jobs:
+  R-CMD-check:
+    runs-on: ${{ matrix.config.os }}
+
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {os: macos-latest,   r: 'release'}
+          - {os: windows-latest, r: 'release'}
+          - {os: ubuntu-latest,  r: 'devel', http-user-agent: 'release'}
+          - {os: ubuntu-latest,  r: 'release'}
+          - {os: ubuntu-latest,  r: 'oldrel-1'}
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      # A development version has no published vendor archive, so configure
+      # would 404 looking for one. NOT_CRAN lets cargo resolve crates online
+      # instead. The vendored offline path is what release.yaml exercises.
+      NOT_CRAN: true
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # anydoc needs rustc >= 1.88 (the crate is edition 2024), which is newer
+      # than several distro toolchains ship; always use the rustup stable.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/rust
+          shared-key: ${{ runner.os }}-R-CMD-check
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config.http-user-agent }}
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck
+          needs: check
+
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true
+          build_args: 'c("--no-manual")'
+          # The action defaults to error-on = "warning", which cannot work here:
+          # two WARNINGs are expected on every run and neither is fixable in
+          # this package (see the next step). Strictness is not given up - it is
+          # re-imposed there against an explicit allow-list, so any *new*
+          # warning still fails the job.
+          error-on: '"error"'
+
+      - name: Fail on any unexpected check warning
+        shell: bash
+        run: |
+          LOG=check/anydoc.Rcheck/00check.log
+          if [ ! -f "$LOG" ]; then
+            echo "No check log at $LOG" >&2
+            exit 1
+          fi
+
+          # Two warnings are expected and understood:
+          #
+          #  "Rust compilation"  This job sets NOT_CRAN, so cargo resolves crates
+          #                      online and R CMD check greps the install log for
+          #                      "Downloading crates ...". A development version
+          #                      has no published vendor archive to build from
+          #                      offline; release.yaml checks that path instead.
+          #  "compiled code"     '_abort', pulled in by Rust std's panic runtime.
+          #                      Removing it means dropping catch_unwind, which is
+          #                      what stops a panic unwinding into C.
+          ALLOWED="compiled code|Rust compilation"
+
+          UNEXPECTED=$(grep -E '^\* checking .* \.\.\. WARNING$' "$LOG" \
+            | sed -E 's/^\* checking (.*) \.\.\. WARNING$/\1/' \
+            | grep -Ev "^($ALLOWED)$" || true)
+
+          if [ -n "$UNEXPECTED" ]; then
+            echo "Unexpected R CMD check WARNING(s):" >&2
+            echo "$UNEXPECTED" >&2
+            echo >&2
+            sed -n '/WARNING$/,/^\* checking/p' "$LOG" >&2
+            exit 1
+          fi
+          echo "Only the two known warnings are present."

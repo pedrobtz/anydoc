@@ -1,0 +1,156 @@
+# Verify a published release: the vendor archive attached to it must match the
+# digest committed in the source package, and a source install must actually
+# work through the normal download path.
+#
+# This workflow deliberately does NOT build the archive. CRAN requires the
+# expected checksum to live inside the source package (tools/vendor.sha256), so
+# the archive has to exist and be hashed *before* the version referencing it is
+# tagged. Rebuilding here would also be unsound: `tar` and `xz` are not
+# byte-reproducible across machines and versions, so a rebuilt archive would
+# fail the very comparison the committed digest exists to make.
+#
+# Release order (see tools/make-vendor.sh):
+#   1. tools/make-vendor.sh                 -> builds archive, prints digest
+#   2. commit the digest to tools/vendor.sha256
+#   3. create the release and upload src/rust/vendor.tar.xz to it
+#   4. this workflow verifies the result
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to verify
+        required: true
+        type: string
+
+name: release.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    name: verify vendor archive and install from source
+
+    steps:
+      - name: Resolve target tag
+        id: target
+        run: |
+          TAG="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then
+            echo "No tag resolved from workflow inputs or release event." >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Check out the tag, not the default branch, so the committed digest and
+      # Cargo.lock are the ones that were actually released.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.target.outputs.tag }}
+
+      # tools/vendor.R builds the download URL from the DESCRIPTION Version, so
+      # a tag that disagrees would look for the archive where nothing published
+      # it. Fail loudly instead.
+      - name: Verify tag matches DESCRIPTION Version
+        run: |
+          VERSION=$(grep '^Version:' DESCRIPTION | sed 's/^Version:[[:space:]]*//')
+          EXPECTED="v${VERSION}"
+          ACTUAL="${{ steps.target.outputs.tag }}"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "Tag '$ACTUAL' does not match DESCRIPTION Version '$VERSION' (expected '$EXPECTED')." >&2
+            exit 1
+          fi
+          echo "Tag matches DESCRIPTION Version: $ACTUAL"
+
+      # Checked explicitly, before the install, so a mismatch reports itself as
+      # a mismatch rather than as a confusing configure failure.
+      - name: Verify the published asset against tools/vendor.sha256
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXPECTED=$(grep -oE '^[0-9a-fA-F]{64}' tools/vendor.sha256 | head -1)
+          if [ -z "$EXPECTED" ]; then
+            echo "tools/vendor.sha256 holds no 64-character hex digest." >&2
+            echo "It was probably left at its placeholder before tagging." >&2
+            exit 1
+          fi
+          gh release download "${{ steps.target.outputs.tag }}" \
+            --pattern vendor.tar.xz --dir /tmp/asset
+          ACTUAL=$(sha256sum /tmp/asset/vendor.tar.xz | awk '{print $1}')
+          echo "expected: $EXPECTED"
+          echo "actual:   $ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "Published asset does not match the committed digest." >&2
+            exit 1
+          fi
+          echo "Vendor archive matches the committed digest."
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          needs: check
+
+      # No ANYDOC_VENDOR_* overrides and no NOT_CRAN: configure must download
+      # the asset from the release and verify it itself, which is exactly what a
+      # user installing from source does. cargo then builds --offline, so a
+      # successful build proves nothing else was fetched.
+      - name: Install from source through the published asset
+        run: |
+          R CMD build --no-build-vignettes --no-manual .
+          R CMD INSTALL anydoc_*.tar.gz
+
+      # Only this path can pass "checking Rust compilation": it is the one build
+      # that resolves crates offline from the verified archive, so the install
+      # log never contains "Downloading crates ...". R-CMD-check.yaml runs with
+      # NOT_CRAN set and therefore cannot check this.
+      - name: R CMD check --as-cran through the published asset
+        env:
+          # URL reachability is covered by urlchecker at release-prep time;
+          # re-checking it here only adds a flaky network dependency.
+          _R_CHECK_CRAN_INCOMING_REMOTE_: false
+        run: |
+          R CMD check --as-cran --no-manual anydoc_*.tar.gz || true
+          LOG=anydoc.Rcheck/00check.log
+          cat "$LOG"
+
+          if grep -q '^Status:.*ERROR' "$LOG"; then
+            echo "R CMD check reported an ERROR." >&2
+            exit 1
+          fi
+          if ! grep -q 'checking Rust compilation \.\.\. OK' "$LOG"; then
+            echo "The vendored offline build did not pass the Rust compilation check." >&2
+            grep -A5 'checking Rust compilation' "$LOG" >&2 || true
+            exit 1
+          fi
+
+          # '_abort' comes from Rust std's panic runtime and cannot be removed
+          # without dropping catch_unwind. Any other warning is a regression.
+          UNEXPECTED=$(grep -E '^\* checking .* \.\.\. WARNING$' "$LOG" \
+            | sed -E 's/^\* checking (.*) \.\.\. WARNING$/\1/' \
+            | grep -Ev '^compiled code$' || true)
+          if [ -n "$UNEXPECTED" ]; then
+            echo "Unexpected R CMD check WARNING(s):" >&2
+            echo "$UNEXPECTED" >&2
+            exit 1
+          fi
+          echo "Check clean apart from the known '_abort' warning."
+
+      - name: Smoke test
+        run: |
+          Rscript -e '
+            library(anydoc)
+            stopifnot(length(anydoc_formats()) == 12L)
+            f <- tempfile(fileext = ".csv")
+            writeLines(c("Region,Units", "North,120"), f)
+            md <- to_markdown(f)
+            stopifnot(grepl("| North | 120 |", md, fixed = TRUE))
+            cat("smoke test OK\n")
+          '
