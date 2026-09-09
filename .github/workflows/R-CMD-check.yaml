@@ -1,7 +1,7 @@
 # Derived from https://github.com/r-lib/actions/tree/v2/examples
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
 
@@ -40,13 +40,27 @@ jobs:
       # than several distro toolchains ship; always use the rustup stable.
       - uses: dtolnay/rust-toolchain@stable
 
+      # Rtools links with the GNU toolchain, while rustup on Windows defaults to
+      # an MSVC host. src/Makevars.win therefore builds --target ...-windows-gnu,
+      # and that target's standard library has to be present for it to compile.
+      # tools/config.R picks the triple; this must agree with it.
+      - name: Install the Windows GNU Rust target
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          if [ "${{ runner.arch }}" = "ARM64" ]; then
+            rustup target add aarch64-pc-windows-gnullvm
+          else
+            rustup target add x86_64-pc-windows-gnu
+          fi
+
       - name: Cache cargo artefacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/rust
           shared-key: ${{ runner.os }}-R-CMD-check
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - uses: r-lib/actions/setup-r@v2
         with:

@@ -2,4 +2,8 @@
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
-directory = "vendor"
+# Substituted by src/Makevars with the absolute path to the extracted tree.
+# An absolute path rather than a relative one: cargo resolves a relative
+# `directory` against the config file's own location, which here is a
+# build-local CARGO_HOME rather than the source tree, so the two differ.
+directory = "@VENDOR_DIR@"

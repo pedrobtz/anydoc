@@ -16,6 +16,12 @@ name = "anydoc_r"
 
 [dependencies]
 anydoc = "0.2"
+# Not used directly for parallelism - declared solely to reach
+# `ThreadPoolBuilder` and cap the *global* pool that `lopdf` (via
+# `pdf-inspector`) uses to parse PDFs. See `limit_thread_pool` in src/lib.rs.
+# Already in the dependency graph transitively, so this adds no crate to the
+# vendored tree and leaves the archive and its digest unchanged.
+rayon = "1"
 
 [profile.release]
 lto = true

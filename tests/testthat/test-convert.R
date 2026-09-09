@@ -1,24 +1,5 @@
-# Every fixture holds the same source document, so what differs between these
-# expectations is what each format is able to carry, not what it says.
-cases <- list(
-  list(file = "report.docx", expect = c("# Quarterly Report", "**12 percent**", "| North | 120 |")),
-  list(file = "report.odt",  expect = c("# Quarterly Report", "**12 percent**", "| North | 120 |")),
-  list(file = "report.epub", expect = c("# Quarterly Report", "**12 percent**", "| North | 120 |")),
-  # A slide deck has no document title, so the heading arrives one level down.
-  list(file = "report.pptx", expect = c("## Quarterly Report", "**12 percent**", "| North | 120 |")),
-  list(file = "report.rtf",  expect = c("Quarterly Report", "**12 percent**", "| North | 120 |")),
-  # Spreadsheets carry the table and nothing else.
-  list(file = "report.xlsx", expect = c("| North | 120 |", "| South | 340 |")),
-  list(file = "report.ods",  expect = c("| North | 120 |", "| South | 340 |")),
-  list(file = "report.csv",  expect = c("| North | 120 |", "| South | 340 |")),
-  # A presentation keeps the text but not the run-level formatting.
-  list(file = "report.odp",  expect = c("Quarterly Report", "12 percent")),
-  # PDF is converted by a different path entirely (pdf-inspector, which emits
-  # Markdown directly rather than going through the document model).
-  list(file = "report.pdf",  expect = c("Quarterly Report", "12 percent"))
-)
-
-for (case in cases) {
+# The fixture table lives in helper-anydoc.R, shared with test-coverage.R.
+for (case in fixture_cases()) {
   local({
     case <- case
     test_that(paste(case$file, "converts to Markdown"), {
@@ -46,6 +27,16 @@ test_that("an explicit format agrees with detection", {
   )
 })
 
+test_that("naming the parser a fixture actually needs converts it", {
+  # The path entry point takes a different route through the Rust layer when a
+  # format is named: it reads the file itself and calls to_markdown_bytes,
+  # rather than letting upstream detect and dispatch.
+  for (case in fixture_cases()) {
+    md <- to_markdown(fixture(case$file), format = case$format)
+    expect_true(nzchar(md), info = paste(case$file, "as", case$format))
+  }
+})
+
 test_that("non-ASCII text round-trips as UTF-8", {
   # Escapes rather than literal accented characters: a non-ASCII byte in an R
   # source file is read in whatever encoding the parser assumes, which makes the
@@ -60,4 +51,22 @@ test_that("non-ASCII text round-trips as UTF-8", {
   expect_equal(Encoding(md), "UTF-8")
   expect_true(grepl(city, md, fixed = TRUE))
   expect_true(grepl(note, md, fixed = TRUE))
+})
+
+test_that("a non-ASCII file name converts", {
+  # A different code path from the one above: this exercises the *path*
+  # crossing the boundary (Rf_translateCharUTF8, then CStr::to_str in Rust),
+  # where the earlier test only exercises the file's contents.
+  dir <- withr::local_tempdir()
+  path <- file.path(dir, "caf\u00e9-r\u00e9sum\u00e9.csv")
+  written <- tryCatch({
+    writeBin(charToRaw("Region,Units\nNorth,120\n"), path)
+    file.exists(path)
+  }, error = function(e) FALSE, warning = function(w) FALSE)
+  # Not every filesystem and locale combination can hold the name; that is the
+  # platform's limitation, not a conversion failure.
+  skip_if_not(written, "filesystem cannot store a non-ASCII file name")
+
+  md <- to_markdown(path)
+  expect_true(grepl("| North | 120 |", md, fixed = TRUE))
 })

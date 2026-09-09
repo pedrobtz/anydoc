@@ -1,7 +1,6 @@
 test_that("raw vectors convert", {
-  bytes <- readBin(fixture("report.docx"), "raw",
-                   n = file.size(fixture("report.docx")))
-  expect_identical(to_markdown_raw(bytes), to_markdown(fixture("report.docx")))
+  expect_identical(to_markdown_raw(fixture_bytes("report.docx")),
+                   to_markdown(fixture("report.docx")))
 })
 
 test_that("raw input rejects anything that is not a raw vector", {

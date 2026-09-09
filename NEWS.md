@@ -13,6 +13,10 @@ First release.
 * `anydoc_formats()` lists the parsers the compiled library actually has, read
   from the library itself rather than from a copy kept in R.
 
+* Conversion uses at most two cores. The PDF parser is internally parallel, so
+  the package caps its thread pool rather than letting it grow to the machine's
+  core count; set `RAYON_NUM_THREADS` to choose a different size.
+
 * Failures are signalled as conditions classed `anydoc_error`, with a subclass
   naming the cause (`anydoc_error_unsupported`, `_needsOcr`, `_malformed`,
   `_encrypted`, `_resourceLimit`, `_missingPart`, `_io`, `_panic`). A PDF with

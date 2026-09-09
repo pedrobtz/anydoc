@@ -2,8 +2,9 @@
 # fixture for a legacy format, this fails and tells them to shorten the list;
 # if a new format appears upstream with no fixture, it fails too.
 test_that("only the legacy OLE formats lack a fixture", {
-  covered <- c("docx", "odt", "epub", "pptx", "rtf", "excel", "ods", "odp",
-               "csv", "pdf")
+  # Derived from the fixture table rather than restated, so adding a fixture
+  # cannot leave this list claiming a gap that no longer exists.
+  covered <- unique(vapply(fixture_cases(), function(x) x$format, character(1)))
   # doc, ppt and xls are OLE compound files; writing one needs LibreOffice,
   # which data-raw/make-fixtures.R does not assume. "xls" is not listed
   # separately because it shares the "excel" parser, which report.xlsx covers.

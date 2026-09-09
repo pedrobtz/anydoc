@@ -1,6 +1,6 @@
 //! C ABI over the `anydoc` crate, for the R package to call via `.Call`.
 //!
-//! Three rules govern everything here:
+//! Four rules govern everything here:
 //!
 //! 1. No panic may cross the boundary - unwinding into C is undefined
 //!    behaviour - so every entry point wraps its work in `catch_unwind`, and
@@ -14,11 +14,14 @@
 //!    return value, so the R layer can raise a *classed* condition. The `code`
 //!    field is `ConvertError::code()`, which upstream documents as the stable
 //!    machine-readable variant name that bindings branch on.
+//! 4. No more than two cores are used at once, which CRAN policy requires of
+//!    any package. The PDF path parses in parallel, so [`limit_thread_pool`]
+//!    sizes rayon's global pool before the first conversion runs.
 
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
 use anydoc::{ConvertError, Format};
 
@@ -61,25 +64,51 @@ fn into_c_string(s: String) -> *mut c_char {
     }
 }
 
-/// R-facing format names. Several upstream container variants share a parser,
-/// so this is the parser list, not the extension list: `.xlsx`, `.xlsb` and
+/// Every format the R layer exposes, in the order [`anydoc_r_formats`]
+/// advertises them.
+const FORMATS: [Format; 12] = [
+    Format::Doc,
+    Format::Docx,
+    Format::Odt,
+    Format::Pdf,
+    Format::Ppt,
+    Format::Pptx,
+    Format::Rtf,
+    Format::Epub,
+    Format::Excel,
+    Format::Ods,
+    Format::Odp,
+    Format::Csv,
+];
+
+/// The R-facing name of a format. Several upstream container variants share a
+/// parser, so this names the parser, not the extension: `.xlsx`, `.xlsb` and
 /// `.xls` are all `"excel"`.
+///
+/// The match is deliberately exhaustive. `Format` is not `#[non_exhaustive]`,
+/// so a variant added upstream stops this compiling rather than silently
+/// becoming a format R has no name for.
+fn format_name(format: Format) -> &'static str {
+    match format {
+        Format::Doc => "doc",
+        Format::Docx => "docx",
+        Format::Odt => "odt",
+        Format::Pdf => "pdf",
+        Format::Ppt => "ppt",
+        Format::Pptx => "pptx",
+        Format::Rtf => "rtf",
+        Format::Epub => "epub",
+        Format::Excel => "excel",
+        Format::Ods => "ods",
+        Format::Odp => "odp",
+        Format::Csv => "csv",
+    }
+}
+
+/// Names and parses through the same table, so the list R validates against
+/// and the list this accepts cannot disagree.
 fn parse_format(name: &str) -> Option<Format> {
-    Some(match name {
-        "doc" => Format::Doc,
-        "docx" => Format::Docx,
-        "odt" => Format::Odt,
-        "pdf" => Format::Pdf,
-        "ppt" => Format::Ppt,
-        "pptx" => Format::Pptx,
-        "rtf" => Format::Rtf,
-        "epub" => Format::Epub,
-        "excel" => Format::Excel,
-        "ods" => Format::Ods,
-        "odp" => Format::Odp,
-        "csv" => Format::Csv,
-        _ => return None,
-    })
+    FORMATS.into_iter().find(|f| format_name(*f) == name)
 }
 
 /// Read an optional format argument: NULL means "detect from content".
@@ -159,11 +188,37 @@ fn panic_message() -> &'static Mutex<Option<String>> {
     MESSAGE.get_or_init(|| Mutex::new(None))
 }
 
+/// Hold rayon's global thread pool to two workers.
+///
+/// The PDF path is parallel: `lopdf` (under `pdf-inspector`) walks the
+/// cross-reference table with `par_iter()`, which runs on rayon's *global*
+/// pool. Left alone that pool sizes itself to every logical CPU, while CRAN
+/// policy allows a package no more than two cores at once - and a conversion
+/// on a shared server has no business taking the whole machine either.
+///
+/// `build_global` succeeds at most once per process and errors after that, so
+/// the result is discarded: a failure means a pool already exists, which is
+/// the outcome this wants anyway. An explicit `RAYON_NUM_THREADS` is left
+/// alone, so a deliberate setting is not overridden.
+fn limit_thread_pool() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if std::env::var_os("RAYON_NUM_THREADS").is_some() {
+            return;
+        }
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build_global();
+    });
+}
+
 /// Run a conversion, funnelling every outcome into the C calling convention.
 unsafe fn run(
     err: *mut AnydocError,
     f: impl FnOnce() -> Result<String, ConvertError>,
 ) -> *mut c_char {
+    limit_thread_pool();
+
     // Held across the whole swap-run-restore sequence, so a concurrent call
     // cannot restore the default hook while this one is still running.
     let _serialised = lock_ignoring_poison(panic_lock());
@@ -269,7 +324,8 @@ pub unsafe extern "C" fn anydoc_r_to_markdown_raw(
 /// The returned string must be released with [`anydoc_r_string_free`].
 #[no_mangle]
 pub extern "C" fn anydoc_r_formats() -> *mut c_char {
-    into_c_string("doc,docx,odt,pdf,ppt,pptx,rtf,epub,excel,ods,odp,csv".to_owned())
+    let names: Vec<&str> = FORMATS.iter().copied().map(format_name).collect();
+    into_c_string(names.join(","))
 }
 
 /// Release a string returned by this library.
@@ -389,9 +445,47 @@ mod tests {
         let names = text(list);
         unsafe { anydoc_r_string_free(list) };
         let names: Vec<&str> = names.split(',').collect();
-        assert_eq!(names.len(), 12);
+        assert_eq!(names.len(), FORMATS.len());
         for name in names {
             assert!(parse_format(name).is_some(), "unparsed format: {name}");
+        }
+    }
+
+    /// `format_name` is exhaustive, so the compiler catches a variant added
+    /// upstream. Nothing but this catches one added to `format_name` and
+    /// forgotten in `FORMATS`, which would leave a format nameable in Rust but
+    /// invisible to R.
+    #[test]
+    fn the_format_table_is_complete_and_unambiguous() {
+        let mut names: Vec<&str> = FORMATS.iter().copied().map(format_name).collect();
+        assert_eq!(
+            names.len(),
+            12,
+            "a format was added to or removed from FORMATS"
+        );
+        names.sort_unstable();
+        let unique = names.len();
+        names.dedup();
+        assert_eq!(names.len(), unique, "two formats share a name: {names:?}");
+
+        // Round-trips: every entry parses back to the variant it names.
+        for format in FORMATS {
+            assert_eq!(parse_format(format_name(format)), Some(format));
+        }
+    }
+
+    /// The pool is capped for CRAN policy, and building it twice must not be
+    /// treated as a failure - `run` calls this on every conversion.
+    #[test]
+    fn the_thread_pool_cap_is_idempotent() {
+        limit_thread_pool();
+        limit_thread_pool();
+        // Set by the first call, unless the environment asked for a size.
+        if std::env::var_os("RAYON_NUM_THREADS").is_none() {
+            assert!(
+                rayon::current_num_threads() <= 2,
+                "pool exceeds the two-core cap"
+            );
         }
     }
 

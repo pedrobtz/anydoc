@@ -19,6 +19,12 @@
 #'
 #' @return A length-1 character vector of Markdown, marked as UTF-8.
 #'
+#' @section Resource use:
+#' Conversion uses at most two cores. PDF parsing is internally parallel, and
+#' its thread pool would otherwise grow to the number of logical CPUs; the
+#' package caps it on first use. Set the `RAYON_NUM_THREADS` environment
+#' variable before the first conversion to choose a different size.
+#'
 #' @section Errors:
 #' Failures are signalled as conditions of class `anydoc_error`, with a more
 #' specific subclass naming the cause, so callers branch on the cause rather

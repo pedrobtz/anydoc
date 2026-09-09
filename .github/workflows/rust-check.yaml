@@ -2,7 +2,7 @@
 # R CMD check, so it gives quick feedback on Rust-only changes.
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     paths: ['src/rust/**', '.github/workflows/rust-check.yaml']
   pull_request:
     paths: ['src/rust/**', '.github/workflows/rust-check.yaml']
@@ -29,7 +29,7 @@ jobs:
           workspaces: src/rust
           shared-key: rust-check
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: cargo fmt
         working-directory: src/rust

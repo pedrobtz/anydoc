@@ -103,8 +103,22 @@ local({
   for (attempt in seq_len(attempts)) {
     message("Downloading vendor archive from ", archive_url,
             if (attempt > 1L) sprintf(" (attempt %d of %d)", attempt, attempts))
+    # download.file() reports an HTTP status in a *warning* and then fails with
+    # a bare "cannot open URL", so the status has to be caught separately from
+    # the error to tell 404 apart from a dropped connection.
+    http <- NULL
     status <- tryCatch(
-      utils::download.file(archive_url, archive_tmp, mode = "wb", quiet = FALSE),
+      withCallingHandlers(
+        utils::download.file(archive_url, archive_tmp, mode = "wb",
+                             quiet = FALSE),
+        warning = function(w) {
+          seen <- regmatches(
+            conditionMessage(w),
+            regexpr("HTTP status was .([0-9]{3})", conditionMessage(w))
+          )
+          if (length(seen)) http <<- as.integer(sub("\\D*", "", seen))
+        }
+      ),
       # Kept as a string rather than re-signalled, so the retry loop owns the
       # decision about when a failure becomes fatal.
       error = function(e) conditionMessage(e)
@@ -114,9 +128,23 @@ local({
       break
     }
     unlink(archive_tmp)
-    if (attempt == attempts) {
+
+    # A 4xx is the server answering, not failing: the asset is absent, renamed,
+    # or private, and asking again changes nothing. Retrying spends 15 seconds
+    # of an install to arrive at the same answer, and buries the status behind
+    # "after 3 attempts". The usual cause is a release that was tagged without
+    # the archive uploaded to it.
+    permanent <- !is.null(http) && http >= 400L && http < 500L
+    if (permanent || attempt == attempts) {
       stop("Failed to download the vendor archive from\n  ", archive_url,
-           "\nafter ", attempts, " attempts.",
+           if (permanent) {
+             paste0("\nThe server returned HTTP ", http,
+                    ", so the asset is missing rather than unreachable.",
+                    "\nCheck that release v", pkg_version,
+                    " exists and has vendor.tar.xz attached to it.")
+           } else {
+             paste0("\nafter ", attempts, " attempts.")
+           },
            if (is.character(status)) paste0("\nLast error: ", status),
            bypass, call. = FALSE)
     }

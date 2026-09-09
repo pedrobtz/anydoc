@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
+# Rscript.exe, and R_ARCH_BIN: R invokes this through sh, where the bare
+# "Rscript" name does not resolve on Windows.
 : "${R_HOME=`R RHOME`}"
-"${R_HOME}/bin/Rscript" tools/vendor.R || exit 1
-"${R_HOME}/bin/Rscript" tools/config.R || exit 1
+"${R_HOME}/bin${R_ARCH_BIN}/Rscript.exe" tools/vendor.R || exit 1
+"${R_HOME}/bin${R_ARCH_BIN}/Rscript.exe" tools/config.R || exit 1

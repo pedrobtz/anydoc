@@ -63,11 +63,11 @@ FALSE)`, symbols declared by hand so no generated headers are needed).
 memory corruption, not a compile error. Change them together.
 
 The one ownership rule the C ABI must get right: Rust allocates the returned Markdown `String`, so the
-crate must export a matching free function and `init.c` must call it after copying into a `mkCharLenCE(...,
+crate must export a matching free function and `init.c` must call it after copying into a `mkCharCE(...,
 CE_UTF8)`. Never `free()` a Rust allocation from C. Output is UTF-8 — mark it as such rather than letting
 it fall into the native encoding.
 
-Two further invariants, both load-bearing and both easy to undo by accident:
+Three further invariants, all load-bearing and all easy to undo by accident:
 
 - **The frees run inside `R_UnwindProtect`.** Building the result list makes ~10 allocating R calls, any of
   which can raise; a longjmp past `anydoc_r_string_free` would strand a Rust `String` the size of the whole
@@ -79,6 +79,15 @@ Two further invariants, both load-bearing and both easy to undo by accident:
   stderr bypasses R's console (invisible in GUI front-ends) and is named in the `checking compiled code`
   warning text. The swap is process-global, so it is serialised behind a mutex. The message reaches R as
   the `anydoc_error_panic` condition.
+- **The rayon global pool is capped at two threads.** `lopdf` (under `pdf-inspector`) walks a PDF's
+  cross-reference table with `par_iter()`, on rayon's *global* pool, which otherwise sizes itself to every
+  logical CPU - measured here at 8 workers on an 8-core machine, against CRAN's limit of two. `run()`
+  therefore calls `limit_thread_pool()` before every conversion; it is a `Once`, respects an explicit
+  `RAYON_NUM_THREADS`, and discards the `build_global` error because that error only means the pool
+  already exists. `rayon` is declared as a direct dependency **solely** to reach `ThreadPoolBuilder` - it
+  was already in the graph transitively, so this added no crate, left `inst/AUTHORS` at 140 and left the
+  vendor archive and its committed digest untouched (verified: the lock gained exactly one line).
+  Measured after 400 PDF conversions: 3 OS threads with the cap, 9 with `RAYON_NUM_THREADS=8`.
 
 **Wrapper crate name — convention, not a constraint.** The R package is `anydoc` *and* the upstream Rust
 dependency is `anydoc`. This was checked: a local crate named `anydoc` depending on registry `anydoc`
@@ -103,11 +112,17 @@ Release asset and is fetched at configure time. Six files cooperate; reading any
    source package, and a digest downloaded beside the archive would verify nothing about the host serving
    both. A placeholder here is a hard error on the download path, not a skipped check.
 4. **`tools/config.R`** - finds `cargo`, logs the `cargo`/`rustc` versions (CRAN asks for this in the
-   install log), then generates `src/Makevars` from `src/Makevars.in`, substituting `@PROFILE_DIR@`,
-   `@ADDITIONAL_LIBS@` and `@CRAN_FLAGS@` (`--offline` unless `NOT_CRAN`).
-5. **`src/Makevars.in`** - unpacks the archive, copies `rust/vendor-config.toml` into a build-local
-   `CARGO_HOME` so `[source.crates-io] replace-with = "vendored-sources"` applies, builds `--offline -j 2`,
-   then `rust_clean` deletes the vendor dir. It fails loudly when a config was written but `vendor/` is
+   install log), then generates `src/Makevars` from `src/Makevars.in`, substituting `@CARGO@`,
+   `@TARGET@`, `@ADDITIONAL_LIBS@`, `@CRAN_FLAGS@` (`--offline` unless `NOT_CRAN`) and `@CLEAN_TARGET@`.
+5. **`src/Makevars.in`** - unpacks the archive into **`src/rust/vendor`** (`tar xf ... -C rust`), then
+   `sed`s `rust/vendor-config.toml` into a build-local `CARGO_HOME` - substituting `@VENDOR_DIR@` with the
+   *absolute* path, because cargo resolves a relative `directory` against the config file's own location
+   and that is the CARGO_HOME, not the source tree - so `[source.crates-io] replace-with =
+   "vendored-sources"` applies, builds `--offline -j 2`, then `rust_clean` deletes the vendor dir.
+   **The vendor path is `src/rust/vendor` in all six files.** It was `src/vendor` in the Makefile alone
+   before 0.1.0, which meant `tools/vendor.R`'s "already extracted" branch could never fire and a failed
+   build left 96 MB that `.Rbuildignore` did not cover; `src/rust/` is additionally protected by the
+   whitelist rule below, so a stray tree there cannot ship even if its own rule is dropped. It fails loudly when a config was written but `vendor/` is
    missing - a truncated archive otherwise surfaces as an inscrutable cargo registry error.
 6. **`tools/make-vendor.sh`** - builds the archive and prints the digest to commit.
 
@@ -196,10 +211,12 @@ CRAN's own machines are fine (Debian testing/forky ships rustc 1.95.0). The casu
 **Ubuntu 24.04 LTS ships rustc 1.75.0**, below even edition 2024's 1.85 floor, so those users must install
 `rustup`. Say so in the README; the r-rust FAQ flags this class of user explicitly.
 
-**2. `cargo build` must be limited to 1-2 jobs — `data.fusion`'s `Makevars.in` does not do this.**
+**2. Two cores, at build time *and* run time.**
 CRAN: *"`cargo build -j N` defaults to the number of 'logical CPUs'. This usually exceeds the maximum
-allowed in the CRAN policy, so needs to be set explicitly to N=1 or 2."* Add `-j 2` to the `cargo build`
-line when porting; it is missing there and is a straightforward policy violation.
+allowed in the CRAN policy, so needs to be set explicitly to N=1 or 2."* `-j 2` is on the `cargo build`
+line (`data.fusion` omits it; do not copy that). The same limit applies to *running* the package, and the
+PDF path is parallel, so `limit_thread_pool()` caps rayon's global pool - see the invariant above. The
+build-time flag alone would not have been enough.
 
 **3. The checksum is embedded in the source package. DONE.** CRAN: *"check that the download is the
 expected code by some sort of checksum. The expected checksum needs to be embedded in the source
@@ -231,8 +248,18 @@ Do **not** port the architecture. `data.fusion` is a query engine: ADBC, `adbi`,
 and connection classes, an `AdbcDriverInit` export from `init.c`. None of that applies — `anydoc` is a
 pure function, so it needs no ADBC layer, no `adbcdrivermanager`/`adbi` dependencies, and no S4.
 When porting `Makevars.in`, add `-j 2` to the `cargo build` line (see CRAN policy above).
-`src/Makevars.win.in`'s Windows link list (`-lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -lncrypt`) is
-DataFusion's; trim it to what this crate actually needs.
+**`src/Makevars.win.in` is not a rename of the Unix one.** Windows must pass `--target` explicitly:
+Rtools links with the GNU toolchain while rustup on Windows defaults to an MSVC host, and an MSVC
+staticlib cannot be linked by Rtools. `tools/config.R` picks the triple (`x86_64-pc-windows-gnu`, or
+`aarch64-pc-windows-gnullvm` on arm64) and substitutes `@TARGET@`; because cargo then writes to
+`target/<triple>/release`, `LIBDIR` is qualified to match, and CI must `rustup target add` the same
+triple. The empty `libgcc_eh.a` mock on `LIBRARY_PATH` is carried over from `ggsql`: the windows-gnu
+target asks the linker for `-lgcc_eh`, which Rtools does not ship under that name. The link list is a
+deliberate superset - an unused `-l` against a system import library is free, a missing one fails a build
+we cannot reproduce locally - and the build passes `--print=native-static-libs` so the install log states
+the exact set rustc asked for. Trim against that log, not against guesswork. No C or C++ is compiled on
+any supported platform (`cc` enters the tree only on Haiku, via `iana-time-zone`), so `-lstdc++` is not
+needed.
 
 ## Commands
 
@@ -339,10 +366,13 @@ run with `NOT_CRAN=true`, letting cargo resolve crates online.
   `release/build` when `NOT_CRAN` is set, so the developer loop keeps its incremental rebuilds.
   `tools/config.R` picks between the two.
 
-- **Stage 5 - CI. DONE, still never pushed (2026-09-04).** `R-CMD-check.yaml`, `rust-check.yaml` (fmt/clippy/test), and a release workflow that
+- **Stage 5 - CI. DONE (2026-09-04).** `R-CMD-check.yaml`, `rust-check.yaml` (fmt/clippy/test), and a release workflow that
   **verifies the uploaded asset against `tools/vendor.sha256`** rather than rebuilding it (see the
-  release-order note above). Runners need the "Increase disk space" step and `Swatinem/rust-cache`.
+  release-order note above). Runners need `Swatinem/rust-cache`; the "Increase disk space" step is
+  data.fusion's and is deliberately *not* ported (see "Porting from data.fusion" above).
   *Written:* `rust-check.yaml` (fmt/clippy/test), `R-CMD-check.yaml` (5-way matrix), `release.yaml`.
+  All three trigger on `main` **and `develop`**, so the first push to the working branch exercises them;
+  `R-CMD-check.yaml` also `rustup target add`s the windows-gnu triple that `src/Makevars.win` builds for.
 
   *Verified locally, as far as is possible without pushing:* all three parse; the gates CI enforces run
   clean here (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`);
@@ -350,8 +380,9 @@ run with `NOT_CRAN=true`, letting cargo resolve crates online.
   comparison against the real archive, and the placeholder guard); and its embedded smoke test passes
   against the installed package.
 
-  *Not verified:* whether the workflows go green on GitHub. That needs a push, which still has not
-  happened.
+  *Not verified:* whether the workflows go green on GitHub. `origin/develop` exists, but the branch was
+  pushed while the workflows still triggered on `main` and pull requests only, so nothing ever ran. They
+  trigger on `develop` as of 2026-09-09, so the next push to it is the first real exercise.
 
   **`error-on` must stay at `"error"`.** `r-lib/actions/check-r-package@v2` defaults to
   `args: 'c("--no-manual", "--as-cran")'` and `error-on: '"warning"'`, and `tools:::.check_packages`'s
@@ -431,7 +462,7 @@ run with `NOT_CRAN=true`, letting cargo resolve crates online.
   digest has to be inside the source package before the version referencing it is tagged:
 
   ```sh
-  git push -u origin develop            # first push; confirms the three workflows go green
+  git push origin develop               # R-CMD-check and rust-check run on develop
   # open a PR to main, merge
   gh release create v0.1.0 --title "anydoc 0.1.0" --notes-file NEWS.md
   gh release upload v0.1.0 .vendor/vendor.tar.xz   # the exact cached file, NOT a rebuild

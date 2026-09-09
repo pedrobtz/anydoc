@@ -33,6 +33,14 @@ test_that("pages is absent on errors that are not about OCR", {
   expect_null(err$pages)
 })
 
+test_that("a directory given as a path is an io error, not a crash", {
+  # file.exists() is true for a directory, so the R-level guard lets it
+  # through and the failure has to come back from the read in Rust.
+  err <- expect_error(to_markdown(withr::local_tempdir()),
+                      class = "anydoc_error_io")
+  expect_identical(err$code, "io")
+})
+
 test_that("path must be a single, non-NA string", {
   expect_error(to_markdown(NA_character_), "single, non-NA string")
   expect_error(to_markdown(c("a", "b")), "single, non-NA string")
@@ -44,8 +52,7 @@ test_that("a structurally broken container is a malformed error", {
   # leaves a file that cannot be opened as a container at all. Derived from the
   # fixture rather than committed as a second binary, so it cannot drift away
   # from the document every other test uses.
-  bytes <- readBin(fixture("report.docx"), "raw",
-                   n = file.size(fixture("report.docx")))
+  bytes <- fixture_bytes("report.docx")
   err <- expect_error(
     to_markdown_raw(utils::head(bytes, length(bytes) %/% 2L), format = "docx"),
     class = "anydoc_error_malformed"
@@ -57,9 +64,8 @@ test_that("a structurally broken container is a malformed error", {
 test_that("a container missing the part it needs is a missingPart error", {
   # A perfectly valid zip that is simply not a Word document: an EPUB has no
   # word/document.xml. Naming the format forces the docx parser onto it.
-  bytes <- readBin(fixture("report.epub"), "raw",
-                   n = file.size(fixture("report.epub")))
-  err <- expect_error(to_markdown_raw(bytes, format = "docx"),
+  err <- expect_error(to_markdown_raw(fixture_bytes("report.epub"),
+                                      format = "docx"),
                       class = "anydoc_error_missingPart")
   expect_identical(err$code, "missingPart")
 })

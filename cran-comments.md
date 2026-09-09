@@ -63,6 +63,17 @@ alternatives if this is not acceptable.
 `cargo build` is limited to `-j 2` as the policy requires, and the `rustc`
 version is printed to the installation log before compilation begins.
 
+## Core usage at run time
+
+The package holds itself to two cores while running, not only while building.
+One of the vendored crates parses PDFs in parallel on rayon's global thread
+pool, which by default sizes itself to every logical CPU. The package caps that
+pool at two threads before the first conversion, so examples, tests and user
+code stay inside the policy. Measured on an 8-core machine over 400 PDF
+conversions: three OS threads in the process (R plus two workers), against nine
+when the cap is lifted. An explicit `RAYON_NUM_THREADS` is honoured rather than
+overridden.
+
 ## Rust toolchain requirement
 
 `SystemRequirements` declares `rustc (>= 1.88)`, which the upstream `anydoc`

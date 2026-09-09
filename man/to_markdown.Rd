@@ -34,6 +34,14 @@ its name, so a mislabelled file still converts correctly. For
 carries no signature must be named explicitly. In practice that means
 \strong{\code{format = "csv"} is required for CSV given as raw bytes}.
 }
+\section{Resource use}{
+
+Conversion uses at most two cores. PDF parsing is internally parallel, and
+its thread pool would otherwise grow to the number of logical CPUs; the
+package caps it on first use. Set the \code{RAYON_NUM_THREADS} environment
+variable before the first conversion to choose a different size.
+}
+
 \section{Errors}{
 
 Failures are signalled as conditions of class \code{anydoc_error}, with a more

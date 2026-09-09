@@ -108,6 +108,7 @@ name = "anydoc-r"
 version = "0.0.0"
 dependencies = [
  "anydoc",
+ "rayon",
 ]
 
 [[package]]

@@ -69,12 +69,20 @@ static SEXP build_result(void *data) {
   if (markdown != NULL) {
     SET_VECTOR_ELT(out, 0, scalar_utf8(markdown));
   } else {
-    SET_VECTOR_ELT(out, 1,
-                   scalar_utf8(err->code != NULL ? err->code : "io"));
-    SET_VECTOR_ELT(out, 2,
-                   scalar_utf8(err->message != NULL
-                                   ? err->message
-                                   : "conversion failed for an unreported reason"));
+    /* The Rust side fills in both fields whenever it returns NULL, so this is
+       an invariant violation rather than a conversion outcome. Raising here is
+       safe and does not leak: R_UnwindProtect runs free_rust_owned on the way
+       out. It deliberately does not become an `anydoc_error` condition -
+       inventing a cause ("io") for a failure the library never reported would
+       send callers branching on it down the wrong path. */
+    if (err->code == NULL || err->message == NULL) {
+      Rf_error("anydoc: the library reported a failure with no %s. "
+               "This is a bug in the package; please report it at "
+               "https://github.com/pedrobtz/anydoc/issues",
+               err->code == NULL ? "error code" : "error message");
+    }
+    SET_VECTOR_ELT(out, 1, scalar_utf8(err->code));
+    SET_VECTOR_ELT(out, 2, scalar_utf8(err->message));
     if (err->pages != NULL) {
       SET_VECTOR_ELT(out, 3, scalar_utf8(err->pages));
       SET_VECTOR_ELT(out, 4, Rf_ScalarInteger((int)err->page_count));

@@ -1,16 +1,33 @@
+# The Rust target triple, chosen by tools/config.R to match the R build.
+#
+# This is NOT optional on Windows, and it is the one real difference from the
+# Unix Makevars. Rtools links with the GNU toolchain, while a rustup install on
+# Windows defaults to the MSVC host: a staticlib built for the host would be
+# emitted in MSVC form and Rtools' linker cannot use it. Passing --target
+# explicitly pins the GNU (or, on arm64, gnullvm) ABI, and cargo then writes
+# under target/<triple>/release instead of target/release, so LIBDIR has to be
+# qualified to match. Both CRAN Rust packages that ship a Windows binary
+# (ggsql, and the r-rust/hellorust template) do exactly this.
+TARGET = @TARGET@
+
 TARGET_DIR = $(CURDIR)/rust/target
-# `cargo build --release` with no --target always writes here. This is not a
-# knob: nothing passes --target, so a configurable profile directory would only
-# ever point at a path cargo never populates.
-LIBDIR = $(TARGET_DIR)/release
+LIBDIR = $(TARGET_DIR)/$(TARGET)/release
 STATLIB = $(LIBDIR)/libanydoc_r.a
-PKG_LIBS = -L$(LIBDIR) -lanydoc_r -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll
+
+# Rust's std and windows-sys resolve these at link time. Deliberately a
+# superset: an unused -l against a system import library costs nothing, while a
+# missing one fails the link on a machine we cannot test from here. The build
+# passes --print=native-static-libs below, so the install log states the exact
+# set rustc asked for - trim against that, not against guesswork.
+PKG_LIBS = -L$(LIBDIR) -lanydoc_r \
+  -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll -lkernel32 -lcrypt32 -ldbghelp
 
 # Resolved by tools/config.R rather than left to the PATH make happens to
 # inherit, which is not necessarily the one R searched.
 CARGO = @CARGO@
 CARGOTMP = $(CURDIR)/.cargo
-VENDOR_DIR = $(CURDIR)/vendor
+# Must match tools/vendor.R, .Rbuildignore and .gitignore. See Makevars.in.
+VENDOR_DIR = $(CURDIR)/rust/vendor
 
 all: $(SHLIB) rust_clean
 
@@ -30,19 +47,32 @@ $(SHLIB): $(STATLIB)
 # nothing, leaving cargo pointed at a directory that does not exist and
 # reporting it as a registry failure. Failing here makes the cause obvious.
 #
+# The empty libgcc_eh.a is a Rtools accommodation, carried over from ggsql: the
+# windows-gnu target tells the linker to look for -lgcc_eh, which Rtools does
+# not ship under that name (its unwinder lives in libgcc). An empty archive
+# satisfies the search without contributing anything, and the real unwinder is
+# picked up from libgcc - which this package needs, because catch_unwind is
+# what stops a Rust panic reaching R.
+#
 # -j 2 is required by CRAN policy: cargo otherwise defaults to the number of
-# logical CPUs, which exceeds the maximum a check is allowed to use.
+# logical CPUs, which exceeds the maximum a check is allowed to use. (The
+# *built* library holds itself to the same limit at run time; see
+# limit_thread_pool in rust/src/lib.rs.)
 # --locked refuses to silently re-resolve Cargo.lock, so the build cannot quietly
 # use a different anydoc 0.2.x than the one that was vendored and audited.
 $(STATLIB):
 	rm -Rf $(CARGOTMP)
+	mkdir -p $(TARGET_DIR)/libgcc_mock
+	touch $(TARGET_DIR)/libgcc_mock/libgcc_eh.a
 	if [ -d "$(VENDOR_DIR)" ]; then \
 		echo "*** using vendored crates in $(VENDOR_DIR)"; \
-		mkdir -p $(CARGOTMP) && cp rust/vendor-config.toml $(CARGOTMP)/config.toml; \
+		mkdir -p $(CARGOTMP) && \
+		sed 's|@VENDOR_DIR@|$(VENDOR_DIR)|' rust/vendor-config.toml > $(CARGOTMP)/config.toml; \
 	elif [ -f ./rust/vendor.tar.xz ]; then \
 		echo "*** unpacking vendored crates"; \
-		tar xf rust/vendor.tar.xz && \
-		mkdir -p $(CARGOTMP) && cp rust/vendor-config.toml $(CARGOTMP)/config.toml; \
+		tar xf rust/vendor.tar.xz -C rust && \
+		mkdir -p $(CARGOTMP) && \
+		sed 's|@VENDOR_DIR@|$(VENDOR_DIR)|' rust/vendor-config.toml > $(CARGOTMP)/config.toml; \
 	fi
 	if [ -f $(CARGOTMP)/config.toml ] && [ ! -d "$(VENDOR_DIR)" ]; then \
 		echo "ERROR: vendored crates were configured but $(VENDOR_DIR) is missing;" >&2; \
@@ -50,8 +80,11 @@ $(STATLIB):
 		exit 1; \
 	fi
 	export CARGO_HOME=$(CARGOTMP) && \
-	export PATH="$(PATH):$(HOME)/.cargo/bin" && \
+	export PATH="$(PATH):$(USERPROFILE)/.cargo/bin:$(HOME)/.cargo/bin" && \
+	export LIBRARY_PATH="$(LIBRARY_PATH);$(TARGET_DIR)/libgcc_mock" && \
+	export RUSTFLAGS="$(RUSTFLAGS) --print=native-static-libs" && \
 	"$(CARGO)" build --lib --release --locked -j 2 @CRAN_FLAGS@ \
+	  --target=$(TARGET) \
 	  --manifest-path=./rust/Cargo.toml --target-dir $(TARGET_DIR)
 	rm -Rf $(CARGOTMP)
 

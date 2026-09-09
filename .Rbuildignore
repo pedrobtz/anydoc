@@ -6,6 +6,9 @@
 ^src/rust/vendor$
 ^src/rust/vendor\.tar\.xz$
 ^src/\.cargo$
+# Where the vendor tree was extracted before it moved under src/rust/.
+# Kept so a stale directory in an existing checkout cannot ship.
+^src/vendor$
 ^data-raw$
 ^src/Makevars$
 ^src/Makevars\.win$
