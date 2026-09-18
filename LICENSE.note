@@ -1,0 +1,25 @@
+The anydoc R package is released under the MIT license (see LICENSE).
+
+The package links a Rust static library. Its sources are not shipped in this
+tarball -- they are downloaded at build time as a checksum-verified archive
+(tools/vendor.R) -- but the installed shared object contains their compiled
+code, so their licenses apply to the installed package.
+
+All 140 crates are distributed under permissive licenses. The full list, with
+each crate's version, license and declared authors, is in inst/AUTHORS.
+
+Most offer MIT as one option. The following do not, and are redistributed
+under the terms shown:
+
+  ryu 1.0.23        Apache-2.0 OR BSL-1.0
+  zopfli 0.8.3      Apache-2.0
+  zlib-rs 0.6.7     Zlib
+
+Two crates carry conjunctive terms, where the second component applies in
+addition to the choice offered by the first:
+
+  encoding_rs 0.8.35     (Apache-2.0 OR MIT) AND BSD-3-Clause
+  unicode-ident 1.0.24   (MIT OR Apache-2.0) AND Unicode-3.0
+
+The upstream 'anydoc' Rust crate itself (https://github.com/firecrawl/anydoc)
+is MIT licensed, copyright Firecrawl.

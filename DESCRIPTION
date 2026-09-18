@@ -1,0 +1,37 @@
+Package: anydoc
+Title: Convert Documents to Markdown
+Version: 0.1.0
+Authors@R: c(
+    person("Pedro", "Baltazar", email = "pedrobtz@gmail.com",
+           role = c("aut", "cre", "cph")),
+    person("Firecrawl", role = "cph",
+           comment = "author of the 'anydoc' Rust crate")
+  )
+Description: Converts 'Microsoft Word', 'PowerPoint' and 'Excel' documents,
+    'OpenDocument' files, Rich Text Format (RTF), Electronic Publication
+    (EPUB), comma-separated values (CSV) and Portable Document Format (PDF)
+    files to Markdown, in the 'GitHub' Flavored Markdown dialect. The
+    conversion is performed by the 'anydoc'
+    <https://github.com/firecrawl/anydoc> 'Rust' library, which is compiled
+    and linked when the package is installed. The input format is detected
+    from the file contents rather than from its extension, so a file carrying
+    the wrong extension still converts correctly. Every format is rendered
+    through a single Markdown serializer, so headings, tables and lists are
+    represented consistently whichever parser handled the input.
+License: MIT + file LICENSE
+Copyright: The R code and the C and Rust glue in this package are copyright
+    its authors, under MIT. The installed shared object additionally contains
+    compiled code from the Rust crates listed in inst/AUTHORS, which are
+    distributed under their own permissive licenses; see LICENSE.note.
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 8.0.0
+Depends:
+    R (>= 4.5)
+Suggests:
+    testthat (>= 3.0.0),
+    withr
+Config/testthat/edition: 3
+SystemRequirements: Cargo (Rust's package manager), rustc (>= 1.88)
+URL: https://github.com/pedrobtz/anydoc
+BugReports: https://github.com/pedrobtz/anydoc/issues
