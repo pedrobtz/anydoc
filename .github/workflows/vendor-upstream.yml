@@ -1,0 +1,32 @@
+# Is the vendored anydoc crate stale?
+#
+# The pinned version lives in src/rust/Cargo.lock, which is what actually
+# determines the build: Cargo.toml says `anydoc = "0.2"`, and --locked means
+# the lock is the thing that gets vendored and audited. Reading the lock
+# rather than the manifest is therefore the honest question -- "0.2" would
+# answer "up to date" forever.
+#
+# The $-anchored name match matters: the tree holds both `anydoc` (the
+# upstream crate) and `anydoc-r` (this package's own wrapper), and an
+# unanchored pattern picks whichever comes first.
+#
+# This never fails the check. A new upstream release is information, not a
+# defect.
+on:
+  schedule:
+    # Weekly. A new upstream release is not urgent, and a daily job that
+    # finds nothing 364 times a year is one people stop reading.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+name: vendor-upstream
+
+jobs:
+  upstream:
+    uses: pedrobtz/r-actions/.github/workflows/vendor-upstream.yml@v1
+    permissions:
+      contents: read
+      issues: write
+    with:
+      upstream-repo: firecrawl/anydoc
+      current-version: sed -n '/^name = "anydoc"$/{n;s/^version = "\(.*\)"$/\1/p;}' src/rust/Cargo.lock
