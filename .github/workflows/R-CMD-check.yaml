@@ -32,6 +32,15 @@ jobs:
       # would 404 looking for one. NOT_CRAN lets cargo resolve crates online
       # instead. The vendored offline path is what release.yaml exercises.
       NOT_CRAN: true
+      # dtolnay/rust-toolchain sets CARGO_TERM_COLOR=always unless it is
+      # already set, and that silently disables R's Rust check. R greps the
+      # install log for the literal "   Compiling " (tools:::.check_packages,
+      # check_rust); coloured output writes "   Compiling\e[0m version_check",
+      # putting the reset where the space belongs, so the pattern never
+      # matches, check_rust() returns NA, and no "checking Rust compilation"
+      # line is emitted at all. Setting it here pre-empts the action, because
+      # it only assigns when the variable is unset.
+      CARGO_TERM_COLOR: never
 
     steps:
       - uses: actions/checkout@v6
