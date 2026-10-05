@@ -42,6 +42,14 @@ $(SHLIB): $(STATLIB)
 # limit_thread_pool in rust/src/lib.rs.)
 # --locked refuses to silently re-resolve Cargo.lock, so the build cannot quietly
 # use a different anydoc 0.2.x than the one that was vendored and audited.
+#
+# CARGO_TERM_COLOR=never keeps the install log plain text whatever the caller's
+# environment holds. R CMD check greps that log for the literal "   Compiling "
+# (tools:::.check_packages, check_rust), and coloured output puts an escape
+# sequence where the trailing space belongs, so with CARGO_TERM_COLOR=always
+# (set by dtolnay/rust-toolchain, and by some shell profiles) the "checking Rust
+# compilation" line silently disappears. Progress bars are disabled for the
+# same reason: they are terminal control output, not log text.
 $(STATLIB):
 	rm -Rf $(CARGOTMP)
 	if [ -d "$(VENDOR_DIR)" ]; then \
@@ -60,6 +68,8 @@ $(STATLIB):
 		exit 1; \
 	fi
 	export CARGO_HOME=$(CARGOTMP) && \
+	export CARGO_TERM_COLOR=never && \
+	export CARGO_TERM_PROGRESS_WHEN=never && \
 	export PATH="$(PATH):$(HOME)/.cargo/bin" && \
 	"$(CARGO)" build --lib --release --locked -j 2 @CRAN_FLAGS@ \
 	  --manifest-path=./rust/Cargo.toml --target-dir $(TARGET_DIR)
