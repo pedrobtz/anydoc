@@ -126,3 +126,167 @@ jobs:
             exit 1
           fi
           echo "Only the two known warnings are present."
+
+  # A toolchain below the rustc 1.88 floor must be refused by configure, with a
+  # message naming the floor, before the vendor archive is downloaded. Left to
+  # cargo, anything older than 1.78 dies on the version-4 Cargo.lock instead
+  # ("failed to parse lock file"), which says nothing about 1.88. 1.75 is what
+  # Ubuntu 24.04 LTS ships. See tools/rust-toolchain.R.
+  old-toolchain:
+    runs-on: ubuntu-latest
+    name: rustc 1.75 is refused with a clear message
+
+    env:
+      RUSTUP_TOOLCHAIN: 1.75.0
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.75.0
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      # No NOT_CRAN and no ANYDOC_VENDOR_*: configure would download the vendor
+      # archive if it got that far, so the absence of the download message
+      # proves the check ran first.
+      - name: Install must fail at configure with [RUST TOO OLD]
+        run: |
+          rustc --version
+          mkdir -p "$RUNNER_TEMP/lib"
+          set +e
+          R CMD INSTALL --library="$RUNNER_TEMP/lib" . > install.log 2>&1
+          STATUS=$?
+          set -e
+          cat install.log
+          if [ "$STATUS" -eq 0 ]; then
+            echo "The install succeeded under rustc 1.75; it must not." >&2
+            exit 1
+          fi
+          grep -q 'RUST TOO OLD' install.log || {
+            echo "configure did not print the [RUST TOO OLD] banner." >&2; exit 1; }
+          grep -q '>= 1.88' install.log || {
+            echo "The message does not name the 1.88 floor." >&2; exit 1; }
+          if grep -q 'failed to parse lock file' install.log; then
+            echo "cargo was reached and failed on the lock file." >&2; exit 1
+          fi
+          if grep -q 'Downloading vendor archive' install.log; then
+            echo "The vendor archive was fetched before the toolchain check." >&2; exit 1
+          fi
+          echo "rustc 1.75 refused at configure, before any download."
+
+  # The vendored, fully offline build is the one CRAN runs, on every platform.
+  # The R-CMD-check job above sets NOT_CRAN and builds online, and release.yaml
+  # only runs on ubuntu when a release is published, so without this job the
+  # Windows offline path (Rtools tar unpacking the archive, the libgcc_eh mock,
+  # the PKG_LIBS list, rust_clean) would first run on CRAN's own builder.
+  #
+  # CARGO_TERM_COLOR=always is set on purpose: src/Makevars(.win).in must force
+  # plain output regardless, because R CMD check greps the install log for a
+  # literal "   Compiling " and coloured output hides it.
+  offline-install:
+    runs-on: ${{ matrix.os }}
+    name: offline vendored install (${{ matrix.os }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Uses the archive already published for a release, verified against the
+      # committed digest. A branch that changes Cargo.lock has no published
+      # archive yet (one is built and uploaded at release time), so the job
+      # then has nothing to test and says so rather than failing.
+      - name: Fetch the published vendor archive matching tools/vendor.sha256
+        id: vendor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXPECTED=$(grep -oE '^[0-9a-fA-F]{64}' tools/vendor.sha256 | head -1)
+          mkdir -p "$RUNNER_TEMP/vendor"
+          for TAG in $(gh release list -R "$GITHUB_REPOSITORY" --limit 20 \
+                         --json tagName -q '.[].tagName'); do
+            rm -f "$RUNNER_TEMP/vendor/vendor.tar.xz"
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
+              --pattern vendor.tar.xz --dir "$RUNNER_TEMP/vendor" || continue
+            ACTUAL=$(sha256sum "$RUNNER_TEMP/vendor/vendor.tar.xz" | awk '{print $1}')
+            if [ "$ACTUAL" = "$EXPECTED" ]; then
+              echo "Using vendor.tar.xz from $TAG ($ACTUAL)"
+              echo "found=true" >> "$GITHUB_OUTPUT"
+              echo "tarball=$RUNNER_TEMP/vendor/vendor.tar.xz" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::notice::No published vendor.tar.xz matches tools/vendor.sha256; skipping the offline install."
+          echo "found=false" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.vendor.outputs.found == 'true'
+
+      - name: Install the Windows GNU Rust target
+        if: steps.vendor.outputs.found == 'true' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          if [ "${{ runner.arch }}" = "ARM64" ]; then
+            rustup target add aarch64-pc-windows-gnullvm
+          else
+            rustup target add x86_64-pc-windows-gnu
+          fi
+
+      - uses: r-lib/actions/setup-r@v2
+        if: steps.vendor.outputs.found == 'true'
+        with:
+          use-public-rspm: true
+
+      - name: Build and install offline from the vendor archive
+        if: steps.vendor.outputs.found == 'true'
+        shell: bash
+        env:
+          ANYDOC_VENDOR_TARBALL: ${{ steps.vendor.outputs.tarball }}
+        run: |
+          R CMD build --no-build-vignettes --no-manual .
+          set +e
+          R CMD INSTALL anydoc_*.tar.gz > install.log 2>&1
+          STATUS=$?
+          set -e
+          cat install.log
+          [ "$STATUS" -eq 0 ] || { echo "Offline install failed." >&2; exit 1; }
+
+          grep -q 'vendored crates' install.log || {
+            echo "The build did not use the vendored crates." >&2; exit 1; }
+          if grep -q 'Downloading crates' install.log; then
+            echo "cargo downloaded crates on the offline path." >&2; exit 1
+          fi
+          # What R CMD check's check_rust() greps for. Absent when cargo's
+          # output is coloured, in which case "checking Rust compilation"
+          # silently never runs.
+          grep -q '^   Compiling ' install.log || {
+            echo "No plain '   Compiling ' line: cargo output was coloured." >&2; exit 1; }
+          if grep -q $'\e\[' install.log; then
+            echo "The install log contains ANSI escape sequences." >&2; exit 1
+          fi
+          echo "Offline install OK with plain cargo output."
+
+      - name: Smoke test
+        if: steps.vendor.outputs.found == 'true'
+        shell: bash
+        run: |
+          Rscript -e '
+            library(anydoc)
+            stopifnot(length(anydoc_formats()) == 12L)
+            f <- tempfile(fileext = ".csv")
+            writeLines(c("Region,Units", "North,120"), f)
+            md <- to_markdown(f)
+            stopifnot(grepl("| North | 120 |", md, fixed = TRUE))
+            cat("smoke test OK\n")
+          '
