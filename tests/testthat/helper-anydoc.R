@@ -17,8 +17,10 @@ fixture_bytes <- function(name) {
 #
 # Every fixture holds the same source document, so what differs between the
 # expectations is what each format is able to carry, not what it says.
-# scan.pdf is deliberately absent: it is the fixture that must fail, and
-# test-errors.R owns it.
+# The fixtures that must fail are deliberately absent; they are listed in
+# failing_fixtures() below, and test-errors.R owns them. owner.pdf is absent
+# too: it is a second PDF, an encrypted one that must still convert, and
+# test-errors.R owns that as well.
 fixture_cases <- function() {
   list(
     list(file = "report.docx", format = "docx",
@@ -46,5 +48,16 @@ fixture_cases <- function() {
     # Markdown directly rather than going through the document model).
     list(file = "report.pdf", format = "pdf",
          expect = c("Quarterly Report", "12 percent"))
+  )
+}
+
+# Fixtures that exist to fail, with the condition class each must raise.
+# test-coverage.R reads this so "every committed fixture is a usable input"
+# knows which failures are the expected ones.
+failing_fixtures <- function() {
+  list(
+    "scan.pdf"    = "anydoc_error_needsOcr",
+    "enc.pdf"     = "anydoc_error_encrypted",
+    "nested.docx" = "anydoc_error_resourceLimit"
   )
 }

@@ -19,9 +19,10 @@ test_that("every committed fixture is a usable input", {
   expect_gt(length(files), 0L)
 
   for (path in files) {
-    if (basename(path) == "scan.pdf") {
-      # The one fixture that is meant to fail; see test-errors.R.
-      expect_error(to_markdown(path), class = "anydoc_error_needsOcr")
+    failing <- failing_fixtures()[[basename(path)]]
+    if (!is.null(failing)) {
+      # Fixtures that exist to fail, each with its own class; see test-errors.R.
+      expect_error(to_markdown(path), class = failing)
     } else {
       md <- to_markdown(path)
       expect_true(nzchar(md), info = paste(basename(path), "converted to nothing"))

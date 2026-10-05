@@ -4,8 +4,9 @@
 # suite needs none of the tools below and does not depend on pandoc being
 # installed wherever R CMD check happens to run.
 #
-# Requires: pandoc, the openxlsx package, and python3 (for the OpenDocument
-# containers, which nothing else here can write).
+# Requires: pandoc, the openxlsx package, python3 (for the OpenDocument
+# containers and the over-nested docx, which nothing else here can write), and
+# qpdf (for the encrypted PDFs).
 #
 # Every fixture carries the same source document, so tests can assert the same
 # heading, bold run, list and table survive whichever parser handled it.
@@ -116,6 +117,46 @@ for (kind in c("ods", "odp")) {
                                  kind))
   if (status != 0) stop("python3 failed for ", kind)
 }
+
+# --- error fixtures: encrypted and over-nested ------------------------------
+# Derived from the fixtures above, so they stay tiny (a few KB each) and carry
+# the same document.
+#
+# enc.pdf needs a password to open, so it raises `anydoc_error_encrypted`.
+# owner.pdf is encrypted with an *empty* user password - the common
+# "owner-locked" PDF that viewers open without asking - and must convert.
+for (spec in list(c("enc.pdf", "secret"), c("owner.pdf", ""))) {
+  status <- system2("qpdf", c(
+    "--encrypt", paste0("--user-password=", spec[[2L]]),
+    "--owner-password=owner", "--bits=256", "--",
+    shQuote(pdf_text), shQuote(file.path(fixtures, spec[[1L]]))
+  ))
+  if (status != 0) stop("qpdf failed for ", spec[[1L]])
+}
+
+# nested.docx is report.docx with its body replaced by tables nested 1,000 deep
+# (3,000 XML elements), past anydoc's fixed max_xml_depth of 256, so it raises
+# `anydoc_error_resourceLimit`. Nesting compresses to almost nothing.
+py_nested <- file.path(tempdir(), "nested.py")
+writeLines('
+import re, sys, zipfile
+src, out, depth = sys.argv[1], sys.argv[2], int(sys.argv[3])
+body = "<w:tbl><w:tr><w:tc>" * depth + "<w:p/>" + "</w:tc></w:tr></w:tbl>" * depth
+with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+    for item in zin.infolist():
+        data = zin.read(item.filename)
+        if item.filename == "word/document.xml":
+            text = data.decode("utf-8")
+            text = re.sub(r"<w:body>.*</w:body>", "<w:body>" + body + "</w:body>",
+                          text, flags=re.S)
+            data = text.encode("utf-8")
+        zout.writestr(item, data)
+', py_nested)
+status <- system2("python3", c(shQuote(py_nested),
+                               shQuote(file.path(fixtures, "report.docx")),
+                               shQuote(file.path(fixtures, "nested.docx")),
+                               "1000"))
+if (status != 0) stop("python3 failed for nested.docx")
 
 cat("Fixtures written to ", fixtures, ":\n", sep = "")
 info <- file.info(list.files(fixtures, full.names = TRUE))
