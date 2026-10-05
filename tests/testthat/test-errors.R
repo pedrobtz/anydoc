@@ -80,13 +80,39 @@ test_that("conditions carry exactly the documented class hierarchy", {
   )
 })
 
-# anydoc_error_encrypted and anydoc_error_resourceLimit have no test here.
-# Producing them needs a password-protected OLE compound file and a document
-# large enough to trip an internal limit; neither can be synthesised from the
-# committed fixtures, and committing them would add binaries far larger than the
-# rest of the suite. They are built by the same code path as every class above -
-# anydoc_condition() derives the class from ConvertError::code() - which the
-# malformed, missingPart, needsOcr, io and unsupported tests all exercise.
-#
+test_that("a password-protected PDF is an encrypted error", {
+  # report.pdf encrypted by qpdf with a user password; see
+  # data-raw/make-fixtures.R.
+  err <- expect_error(to_markdown(fixture("enc.pdf")),
+                      class = "anydoc_error_encrypted")
+  expect_identical(err$code, "encrypted")
+  expect_null(err$pages)
+  expect_null(err$page_count)
+  expect_error(to_markdown_raw(fixture_bytes("enc.pdf")),
+               class = "anydoc_error_encrypted")
+})
+
+test_that("an owner-locked PDF with an empty user password still converts", {
+  # The common case: encrypted, but viewers open it without asking for a
+  # password. It must not be refused as encrypted.
+  md <- to_markdown(fixture("owner.pdf"))
+  expect_match(md, "Quarterly Report", fixed = TRUE)
+  expect_match(md, "12 percent", fixed = TRUE)
+})
+
+test_that("pathologically deep XML is a resourceLimit error", {
+  # report.docx with its body replaced by tables nested 1,000 deep, past the
+  # library's fixed XML depth limit; see data-raw/make-fixtures.R.
+  err <- expect_error(to_markdown(fixture("nested.docx")),
+                      class = "anydoc_error_resourceLimit")
+  expect_identical(err$code, "resourceLimit")
+  expect_match(conditionMessage(err), "max_xml_depth", fixed = TRUE)
+  expect_null(err$pages)
+  expect_null(err$page_count)
+  expect_error(to_markdown_raw(fixture_bytes("nested.docx")),
+               class = "anydoc_error_resourceLimit")
+})
+
 # anydoc_error_panic is covered on the Rust side, in src/rust/src/lib.rs, where
-# a panic can be provoked deliberately.
+# a panic can be provoked deliberately. Fuzzing found no input that panics the
+# library, so there is no fixture that could reach it from R.

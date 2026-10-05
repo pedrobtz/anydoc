@@ -1,5 +1,8 @@
 # Detect the Rust toolchain and generate src/Makevars from the template.
 local({
+  # rust_floor, rust_too_old() and rust_too_old_message().
+  source(file.path("tools", "rust-toolchain.R"), local = TRUE)
+
   is_windows <- identical(.Platform$OS.type, "windows")
   template <- if (is_windows) "src/Makevars.win.in" else "src/Makevars.in"
   outfile <- if (is_windows) "src/Makevars.win" else "src/Makevars"
@@ -80,6 +83,15 @@ local({
     # Not fatal - cargo will find its own rustc - but the missing log line costs
     # a check WARNING, so say why.
     message("*** rustc: not found next to cargo or on the PATH")
+  }
+
+  # Refuse a toolchain below the floor here, with a message that names it.
+  # Left to cargo, anything older than 1.78 fails on the version-4 Cargo.lock
+  # instead, saying nothing about 1.88. configure runs this script before
+  # tools/vendor.R, so a hopeless toolchain also fails before the download.
+  too_old <- rust_too_old(cargo_version, rustc_version)
+  if (length(too_old)) {
+    stop(rust_too_old_message(too_old), call. = FALSE)
   }
 
   # Windows needs an explicit --target: Rtools links with the GNU toolchain,

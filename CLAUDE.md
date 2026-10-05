@@ -101,7 +101,9 @@ crate is `crate::`). Name the wrapper crate `anydoc-r`/`libanydoc_r.a` anyway, m
 CRAN forbids a source tarball this large, so the vendored crate tree ships **out-of-band** as a GitHub
 Release asset and is fetched at configure time. Six files cooperate; reading any one alone is misleading:
 
-1. **`configure` / `configure.win`** - two lines, run `tools/vendor.R` then `tools/config.R`.
+1. **`configure` / `configure.win`** - two lines, run `tools/config.R` then `tools/vendor.R`. That order
+   is deliberate: `config.R` refuses a missing or too-old toolchain, and doing so before `vendor.R` means a
+   hopeless install fails in milliseconds instead of after an 11 MB download.
 2. **`tools/vendor.R`** - acquires `src/rust/vendor.tar.xz`. Decision tree, in order:
    `ANYDOC_VENDOR_TARBALL` (local archive, not digest-checked - the developer chose the file) ->
    `src/rust/vendor/` already extracted -> archive already present -> `NOT_CRAN` set (skip; cargo goes
@@ -112,7 +114,9 @@ Release asset and is fetched at configure time. Six files cooperate; reading any
    source package, and a digest downloaded beside the archive would verify nothing about the host serving
    both. A placeholder here is a hard error on the download path, not a skipped check.
 4. **`tools/config.R`** - finds `cargo`, logs the `cargo`/`rustc` versions (CRAN asks for this in the
-   install log), then generates `src/Makevars` from `src/Makevars.in`, substituting `@CARGO@`,
+   install log), refuses either one below the floor in `tools/rust-toolchain.R` with a `[RUST TOO OLD]`
+   banner (`Cargo.lock` is lockfile v4, so cargo < 1.78 would otherwise die on the lock file without ever
+   mentioning 1.88; `test-toolchain.R` and the `old-toolchain` CI job pin this), then generates `src/Makevars` from `src/Makevars.in`, substituting `@CARGO@`,
    `@TARGET@`, `@ADDITIONAL_LIBS@`, `@CRAN_FLAGS@` (`--offline` unless `NOT_CRAN`) and `@CLEAN_TARGET@`.
 5. **`src/Makevars.in`** - unpacks the archive into **`src/rust/vendor`** (`tar xf ... -C rust`), then
    `sed`s `rust/vendor-config.toml` into a build-local `CARGO_HOME` - substituting `@VENDOR_DIR@` with the

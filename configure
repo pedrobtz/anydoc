@@ -1,4 +1,7 @@
 #!/usr/bin/env sh
+# tools/config.R runs first: it refuses a missing or too-old Rust toolchain, and
+# doing that before tools/vendor.R means such an install fails in milliseconds
+# rather than after an 11 MB download it could never use.
 : "${R_HOME=`R RHOME`}"
-"${R_HOME}/bin/Rscript" tools/vendor.R || exit 1
 "${R_HOME}/bin/Rscript" tools/config.R || exit 1
+"${R_HOME}/bin/Rscript" tools/vendor.R || exit 1

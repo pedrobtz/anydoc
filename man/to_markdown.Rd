@@ -20,7 +20,9 @@ parser rather than the extension: \code{.xlsx}, \code{.xlsb} and \code{.xls} are
 \item{bytes}{A raw vector holding a single document.}
 }
 \value{
-A length-1 character vector of Markdown, marked as UTF-8.
+A length-1 character vector of Markdown, marked as UTF-8. (R never
+marks a pure-ASCII string, so \code{\link[=Encoding]{Encoding()}} reports \code{"unknown"} for output
+with no non-ASCII characters; that is expected.)
 }
 \description{
 \code{to_markdown()} converts a file; \code{to_markdown_raw()} converts a document
@@ -40,6 +42,15 @@ Conversion uses at most two cores. PDF parsing is internally parallel, and
 its thread pool would otherwise grow to the number of logical CPUs; the
 package caps it on first use. Set the \code{RAYON_NUM_THREADS} environment
 variable before the first conversion to choose a different size.
+
+Memory use scales with the document, not just with the file: the whole
+document is parsed into memory before any Markdown is written, so peak usage
+can be tens of times the input size (measured at 25 to 40 times for large
+CSV files).
+
+A conversion cannot be interrupted part-way. The library offers no
+cancellation hook, so an interrupt (Ctrl-C, Esc) is acted on only once the
+conversion has finished, which for a large PDF can take minutes.
 }
 
 \section{Errors}{

@@ -20,7 +20,10 @@ test_that("format must be NULL or a single string", {
   expect_error(to_markdown(fixture("report.docx"), format = 1L))
 })
 
-test_that("naming the wrong format fails rather than producing nonsense", {
+test_that("forcing the RTF parser onto a docx fails rather than converting", {
+  # Not a general promise: forcing `format` hands the bytes to that parser, and
+  # some parsers accept almost anything (forced "csv" renders any bytes as a
+  # table). This pins one pair whose parser does check its input.
   expect_error(to_markdown(fixture("report.docx"), format = "rtf"),
                class = "anydoc_error")
 })

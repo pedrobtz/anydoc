@@ -20,12 +20,11 @@ Description: Converts 'Microsoft Word', 'PowerPoint' and 'Excel' documents,
     represented consistently whichever parser handled the input.
 License: MIT + file LICENSE
 Copyright: The R code and the C and Rust glue in this package are copyright
-    its authors, under MIT. The installed shared object additionally contains
-    compiled code from the Rust crates listed in inst/AUTHORS, which are
-    distributed under their own permissive licenses; see LICENSE.note.
+    Pedro Baltazar, under MIT. The installed shared object additionally
+    contains compiled code from the Rust crates listed in inst/AUTHORS, which
+    are distributed under their own permissive licenses; see LICENSE.note.
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 8.0.0
 Depends:
     R (>= 4.5)
 Suggests:
@@ -35,3 +34,4 @@ Config/testthat/edition: 3
 SystemRequirements: Cargo (Rust's package manager), rustc (>= 1.88)
 URL: https://github.com/pedrobtz/anydoc
 BugReports: https://github.com/pedrobtz/anydoc/issues
+Config/roxygen2/version: 8.1.0
