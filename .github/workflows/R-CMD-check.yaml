@@ -272,7 +272,7 @@ jobs:
           # silently never runs.
           grep -q '^   Compiling ' install.log || {
             echo "No plain '   Compiling ' line: cargo output was coloured." >&2; exit 1; }
-          if grep -q $'\e\[' install.log; then
+          if grep -q $'\e' install.log; then
             echo "The install log contains ANSI escape sequences." >&2; exit 1
           fi
           echo "Offline install OK with plain cargo output."
